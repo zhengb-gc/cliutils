@@ -1071,11 +1071,13 @@ func TestHTTPProtocolHTTP11(t *testing.T) {
 }
 
 func TestHTTPProtocolHTTP2(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Protocol", r.Proto)
 		w.Header().Set("X-Server", "HTTP/2")
 		w.Write([]byte("HTTP/2 response"))
 	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
 	defer server.Close()
 
 	task := &HTTPTask{
@@ -1116,6 +1118,7 @@ func TestHTTPProtocolHTTP2(t *testing.T) {
 
 	tags, _ := task.GetResults()
 	assert.Equal(t, "OK", tags["status"])
+	assert.Equal(t, "HTTP/2.0", tags["proto"])
 }
 
 func TestHTTPProtocolHTTP3(t *testing.T) {
@@ -1344,9 +1347,9 @@ func TestHTTPProtocolHTTP2OnlyFail(t *testing.T) {
 	err = task.Run()
 	assert.NoError(t, err)
 
-	tags, _ := task.GetResults()
+	tags, fields := task.GetResults()
 	assert.Equal(t, "FAIL", tags["status"])
-	assert.Contains(t, tags["fail_reason"], "expected HTTP/2")
+	assert.Contains(t, fields["fail_reason"], "expected HTTP/2")
 }
 
 func TestGetProtocolMethod(t *testing.T) {
