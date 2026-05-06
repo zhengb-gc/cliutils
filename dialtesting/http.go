@@ -11,6 +11,7 @@ package dialtesting
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/net/http2"
 )
 
 var (
@@ -363,7 +365,9 @@ func (t *HTTPTask) run() error {
 
 	t.req = t.req.WithContext(httptrace.WithClientTrace(t.req.Context(), trace))
 
-	t.req.Header.Add("Connection", "close")
+	if t.protocol != "http/2-only" && t.protocol != "http/3" {
+		t.req.Header.Add("Connection", "close")
+	}
 
 	if agentInfo, ok := t.GetOption()["userAgent"]; ok {
 		t.req.Header.Add("User-Agent", agentInfo)
@@ -627,14 +631,27 @@ func (t *HTTPTask) init() error {
 			},
 		}
 	case "http/2-only":
-		http2OnlyTLS := tlsConfig.Clone()
-		http2OnlyTLS.NextProtos = []string{"h2"}
-		t.cli = &http.Client{
-			Timeout: httpTimeout,
-			Transport: &http.Transport{
-				TLSClientConfig:   http2OnlyTLS,
-				ForceAttemptHTTP2: true,
-			},
+		if isPlainHTTP(t.URL) {
+			t.cli = &http.Client{
+				Timeout: httpTimeout,
+				Transport: &http2.Transport{
+					AllowHTTP: true,
+					DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+						var dialer net.Dialer
+						return dialer.DialContext(ctx, network, addr)
+					},
+				},
+			}
+		} else {
+			http2OnlyTLS := tlsConfig.Clone()
+			http2OnlyTLS.NextProtos = []string{"h2"}
+			t.cli = &http.Client{
+				Timeout: httpTimeout,
+				Transport: &http.Transport{
+					TLSClientConfig:   http2OnlyTLS,
+					ForceAttemptHTTP2: true,
+				},
+			}
 		}
 	case "http/2":
 		t.cli = &http.Client{
@@ -742,6 +759,11 @@ func (t *HTTPTask) init() error {
 	}
 
 	return nil
+}
+
+func isPlainHTTP(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return err == nil && strings.EqualFold(u.Scheme, "http")
 }
 
 func (t *HTTPTask) getHostName() ([]string, error) {

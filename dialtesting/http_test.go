@@ -32,6 +32,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 func getHttpCases(httpServer, httpsServer, proxyServer *httptest.Server) []struct {
@@ -1329,7 +1331,8 @@ func TestHTTPProtocolHTTP2OnlyFail(t *testing.T) {
 		Method: "GET",
 		URL:    httpServer.URL,
 		AdvanceOptions: &HTTPAdvanceOption{
-			Protocol: "http/2-only",
+			Protocol:       "http/2-only",
+			RequestTimeout: "1s",
 		},
 		SuccessWhen: []*HTTPSuccess{
 			{
@@ -1349,7 +1352,56 @@ func TestHTTPProtocolHTTP2OnlyFail(t *testing.T) {
 
 	tags, fields := task.GetResults()
 	assert.Equal(t, "FAIL", tags["status"])
-	assert.Contains(t, fields["fail_reason"], "expected HTTP/2")
+	assert.NotEmpty(t, fields["fail_reason"])
+}
+
+func TestHTTPProtocolHTTP2OnlyH2C(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Protocol", r.Proto)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("h2c response"))
+	})
+	httpServer := httptest.NewServer(h2c.NewHandler(handler, &http2.Server{}))
+	defer httpServer.Close()
+
+	task := &HTTPTask{
+		Task: &Task{
+			ExternalID: cliutils.XID("dtst_"),
+			Name:       "_test_http2_only_h2c",
+			Region:     "hangzhou",
+			Frequency:  "1s",
+		},
+		Method: "GET",
+		URL:    httpServer.URL,
+		AdvanceOptions: &HTTPAdvanceOption{
+			Protocol:       "http/2-only",
+			RequestTimeout: "1s",
+		},
+		SuccessWhen: []*HTTPSuccess{
+			{
+				StatusCode: []*SuccessOption{
+					{Is: "200"},
+				},
+				Header: map[string][]*SuccessOption{
+					"X-Protocol": {
+						{Is: "HTTP/2.0"},
+					},
+				},
+			},
+		},
+	}
+
+	task.SetChild(task)
+	err := task.Init()
+	assert.NoError(t, err)
+
+	err = task.Run()
+	assert.NoError(t, err)
+
+	tags, fields := task.GetResults()
+	assert.Equal(t, "HTTP/2.0", tags["proto"])
+	assert.Equal(t, "OK", tags["status"])
+	assert.Equal(t, 200, fields["status_code"])
 }
 
 func TestGetProtocolMethod(t *testing.T) {
